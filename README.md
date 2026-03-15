@@ -17,6 +17,8 @@ cargo run
 
 ## Controls
 
+- `Left/Right Arrows`: cycle through available shader scenes
+- `/`: enter search mode (type to filter, `Enter` to switch, `Esc` to cancel)
 - `C`: toggle split comparison
 - Left mouse drag: move the split line
 - `Esc`: quit

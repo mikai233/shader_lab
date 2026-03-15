@@ -1,10 +1,17 @@
 use winit::dpi::PhysicalSize;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    pub active: bool,
+    pub query: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct InputState {
     pub mouse_position: [f32; 2],
     pub resolution: [f32; 2],
     pub drag_compare: bool,
+    pub search: SearchState,
 }
 
 impl InputState {
@@ -13,6 +20,7 @@ impl InputState {
             mouse_position: [size.width as f32 * 0.5, size.height as f32 * 0.5],
             resolution: [size.width as f32, size.height as f32],
             drag_compare: false,
+            search: SearchState::default(),
         }
     }
 
@@ -27,6 +35,7 @@ impl Default for InputState {
             mouse_position: [0.0, 0.0],
             resolution: [1.0, 1.0],
             drag_compare: false,
+            search: SearchState::default(),
         }
     }
 }

@@ -14,7 +14,7 @@ use winit::window::{Window, WindowAttributes, WindowId};
 use crate::hot_reload::ShaderHotReload;
 use crate::input::InputState;
 use crate::renderer::{GlobalsData, RenderError, Renderer};
-use crate::scene::{LabScene, create_default_scene};
+use crate::scene::{LabScene, SceneType};
 
 pub fn run() -> anyhow::Result<()> {
     let event_loop = EventLoop::new()?;
@@ -27,6 +27,7 @@ struct ShaderLabApp {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
     scene: Option<Box<dyn LabScene>>,
+    current_scene_index: usize,
     hot_reload: Option<ShaderHotReload>,
     input: InputState,
     start_time: Instant,
@@ -43,6 +44,7 @@ impl Default for ShaderLabApp {
             window: None,
             renderer: None,
             scene: None,
+            current_scene_index: 0,
             hot_reload: None,
             input: InputState::default(),
             start_time: now,
@@ -63,7 +65,7 @@ impl ShaderLabApp {
         let window = Arc::new(
             event_loop.create_window(
                 WindowAttributes::default()
-                    .with_title("shader_lab | C toggle compare | left-drag split | Esc to quit")
+                    .with_title("shader_lab | Arrow keys to switch | / to search | Esc to quit")
                     .with_inner_size(PhysicalSize::new(1280, 720))
                     .with_resizable(true),
             )?,
@@ -71,7 +73,18 @@ impl ShaderLabApp {
 
         let renderer = pollster::block_on(Renderer::new(window.clone()))
             .context("failed to create renderer")?;
-        let scene = create_default_scene(&renderer).context("failed to create default scene")?;
+
+        let all_scenes = SceneType::all();
+        let initial_scene_type = SceneType::Voronoi;
+        self.current_scene_index = all_scenes
+            .iter()
+            .position(|&s| s == initial_scene_type)
+            .unwrap_or(0);
+
+        let scene = initial_scene_type
+            .create(&renderer)
+            .context("failed to create initial scene")?;
+
         let hot_reload = ShaderHotReload::new(PathBuf::from("shaders"))
             .ok()
             .flatten();
@@ -85,6 +98,7 @@ impl ShaderLabApp {
         self.last_frame_time = self.start_time;
         self.frame_index = 0;
 
+        self.update_window_title();
         info!("shader_lab initialized");
         Ok(())
     }
@@ -147,6 +161,61 @@ impl ShaderLabApp {
                 error!("render error: {err:#}");
             }
         }
+    }
+
+    fn switch_scene(&mut self, index: usize) {
+        let all_scenes = SceneType::all();
+        if index >= all_scenes.len() {
+            return;
+        }
+
+        let (Some(renderer), Some(window)) = (self.renderer.as_ref(), self.window.as_ref()) else {
+            return;
+        };
+
+        match all_scenes[index].create(renderer) {
+            Ok(new_scene) => {
+                self.scene = Some(new_scene);
+                self.current_scene_index = index;
+                self.update_window_title();
+                info!("switched to scene: {}", all_scenes[index].name());
+                window.request_redraw();
+            }
+            Err(err) => error!("failed to switch scene: {err:#}"),
+        }
+    }
+
+    fn update_window_title(&self) {
+        let Some(window) = &self.window else {
+            return;
+        };
+
+        let all_scenes = SceneType::all();
+        let current_name = all_scenes[self.current_scene_index].name();
+
+        let title = if self.input.search.active {
+            let matches: Vec<&str> = all_scenes
+                .iter()
+                .map(|s| s.name())
+                .filter(|name| {
+                    name.to_lowercase()
+                        .contains(&self.input.search.query.to_lowercase())
+                })
+                .collect();
+
+            format!(
+                "shader_lab | SEARCHING: {} | Matches: [{}]",
+                self.input.search.query,
+                matches.join(", ")
+            )
+        } else {
+            format!(
+                "shader_lab | Scene: {} | Arrows to cycle | / to search",
+                current_name
+            )
+        };
+
+        window.set_title(&title);
     }
 }
 
@@ -213,8 +282,54 @@ impl ApplicationHandler for ShaderLabApp {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state.is_pressed() {
+                    if self.input.search.active {
+                        match event.logical_key {
+                            Key::Named(NamedKey::Enter) => {
+                                let query = self.input.search.query.to_lowercase();
+                                let matched_index = SceneType::all()
+                                    .iter()
+                                    .position(|s| s.name().to_lowercase().contains(&query));
+                                if let Some(idx) = matched_index {
+                                    self.switch_scene(idx);
+                                }
+                                self.input.search.active = false;
+                                self.input.search.query.clear();
+                                self.update_window_title();
+                            }
+                            Key::Named(NamedKey::Escape) => {
+                                self.input.search.active = false;
+                                self.input.search.query.clear();
+                                self.update_window_title();
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.input.search.query.pop();
+                                self.update_window_title();
+                            }
+                            Key::Character(ref text) => {
+                                self.input.search.query.push_str(text);
+                                self.update_window_title();
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
                     match event.logical_key {
                         Key::Named(NamedKey::Escape) => event_loop.exit(),
+                        Key::Named(NamedKey::ArrowRight) => {
+                            let next = (self.current_scene_index + 1) % SceneType::all().len();
+                            self.switch_scene(next);
+                        }
+                        Key::Named(NamedKey::ArrowLeft) => {
+                            let len = SceneType::all().len();
+                            let next = (self.current_scene_index + len - 1) % len;
+                            self.switch_scene(next);
+                        }
+                        Key::Character(ref text) if text == "/" => {
+                            self.input.search.active = true;
+                            self.input.search.query.clear();
+                            self.update_window_title();
+                        }
                         Key::Character(ref text) if text.eq_ignore_ascii_case("c") => {
                             self.compare_enabled = !self.compare_enabled;
                         }
